@@ -12,6 +12,8 @@ public enum AuthResult {
     NAME_MISMATCH,
     REVOKED,
 
+    RATE_LIMITED,
+
     // NEW for OFFLINE_KEYPAIR
     MISSING_PUBLIC_KEY,
     MISSING_CLIENT_PROOF,

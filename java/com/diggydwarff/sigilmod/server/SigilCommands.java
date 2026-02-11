@@ -166,15 +166,49 @@ public class SigilCommands {
 
     private int writeIssued(CommandSourceStack src, PlayerCertificate cert) {
         try {
-            Path out = SigilPaths.issuedDir().resolve(cert.serialBase64 + ".json");
+            // Determine serverId + fingerprint for trust pin file
+            String serverId = ServerId.fromFingerprint(KeyManager.get().publicKeyFingerprint());
+            String fpB64 = SigilCrypto.b64(KeyManager.get().publicKeyFingerprint());
+
+            // Choose issued dir organization
+            Path dir;
+            Path bundleDir;
+
+            if (cert.uuid != null && !cert.uuid.isBlank()) {
+                // ONLINE_UUID
+                dir = SigilPaths.issuedByUuidDir(cert.uuid);
+                bundleDir = SigilPaths.issuedBundleDirForOnline(cert.uuid, cert.serialBase64);
+            } else {
+                // OFFLINE_KEYPAIR
+                dir = SigilPaths.issuedByNameDir(cert.playerName);
+                bundleDir = SigilPaths.issuedBundleDirForOffline(cert.playerName, cert.serialBase64);
+            }
+
+            Files.createDirectories(dir);
+            Files.createDirectories(bundleDir);
+
+            // 1) Keep archival copy in issued/<group>/<serial>.json
+            Path out = dir.resolve(cert.serialBase64 + ".json");
             CertCodec.write(out, cert);
+
+            // 2) Write client bundle files (zip this folder and send to player)
+            Path bundleCert = SigilPaths.issuedBundleCertFile(bundleDir);
+            CertCodec.write(bundleCert, cert);
+
+            Path bundleTrust = SigilPaths.issuedBundleTrustedFingerprintFile(bundleDir);
+            Files.writeString(bundleTrust, fpB64 + "\n", StandardCharsets.UTF_8);
 
             src.sendSuccess(() -> Component.literal("Issued Sigil cert for " + cert.playerName), true);
             src.sendSuccess(() -> Component.literal("Serial: " + cert.serialBase64), false);
-            src.sendSuccess(() -> Component.literal("Saved: " + out), false);
-            String serverId = ServerId.fromFingerprint(KeyManager.get().publicKeyFingerprint());
+            src.sendSuccess(() -> Component.literal("Saved (archive): " + out), false);
+
+            src.sendSuccess(() -> Component.literal("Client bundle dir: " + bundleDir), false);
+            src.sendSuccess(() -> Component.literal("Bundle contains:"), false);
+            src.sendSuccess(() -> Component.literal(" - player_cert.json"), false);
+            src.sendSuccess(() -> Component.literal(" - trusted_fingerprint.txt"), false);
+
             src.sendSuccess(() -> Component.literal(
-                    "Client installs cert to: <minecraft>/config/sigil/servers/" + serverId + "/player_cert.json"
+                    "Player installs bundle contents to: <minecraft>/config/sigil/servers/" + serverId + "/"
             ), false);
 
             return 1;
@@ -183,6 +217,8 @@ public class SigilCommands {
             return 0;
         }
     }
+
+
 
     private int provisionOfflineBundle(CommandSourceStack src, String name, int daysValid) {
         try {
@@ -226,13 +262,22 @@ public class SigilCommands {
             var privOut = SigilPaths.provisionedPrivateKeyFile(name, serverId);
             Files.writeString(privOut, playerPrivateKeyBase64 + "\n", StandardCharsets.UTF_8);
 
+            // trusted fingerprint file (base64 sha256 fingerprint)
+            var trustOut = SigilPaths.provisionedTrustedFingerprintFile(name, serverId);
+            String fpB64 = SigilCrypto.b64(KeyManager.get().publicKeyFingerprint());
+            Files.writeString(trustOut, fpB64 + "\n", StandardCharsets.UTF_8);
+
             src.sendSuccess(() -> Component.literal("Provisioned OFFLINE bundle for " + name), true);
             src.sendSuccess(() -> Component.literal("serverId: " + serverId), false);
             src.sendSuccess(() -> Component.literal("Bundle dir: " + bundleDir), false);
             src.sendSuccess(() -> Component.literal("Give player these two files:"), false);
             src.sendSuccess(() -> Component.literal(" - " + certOut.getFileName()), false);
             src.sendSuccess(() -> Component.literal(" - " + privOut.getFileName()), false);
+            src.sendSuccess(() -> Component.literal(" - " + trustOut.getFileName()), false);
             src.sendSuccess(() -> Component.literal("Player installs to: <minecraft>/config/sigil/servers/" + serverId + "/"), false);
+            src.sendSuccess(() -> Component.literal("WARNING: player_ed25519_private.key IS A PASSWORD."), false);
+            src.sendSuccess(() -> Component.literal("Do NOT send it in public chat. Prefer encrypted transfer."), false);
+            src.sendSuccess(() -> Component.literal("If leaked, revoke the cert immediately: /sigil revoke <serialBase64>"), false);
 
             return 1;
         } catch (Exception ex) {

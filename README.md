@@ -1,22 +1,27 @@
 # Sigil
 
 **Sigil** is a Forge security mod that enforces **server-authenticated player access** using **cryptographically signed certificates**.
-If enabled, players who do not present a valid Sigil certificate are disconnected during join.
 
-Sigil is intended for servers that want **explicit, cryptographic control over who may connect**, beyond vanilla UUID checks.
+If enabled, players who do not successfully complete the Sigil authentication handshake are **disconnected during login**.
+
+Sigil is designed for servers that want **explicit cryptographic control over who may connect**, including **offline-mode servers**, without relying solely on Mojang authentication.
 
 ---
 
 ## Features
 
-- Server-signed player certificates (Ed25519)
+- Server-signed player certificates (**Ed25519**)
 - Two identity modes:
-  - **ONLINE_UUID** – certificate bound to UUID + player name
-  - **OFFLINE_KEYPAIR** – certificate bound to player public key
+  - **ONLINE_UUID** – certificate bound to Mojang UUID + player name
+  - **OFFLINE_KEYPAIR** – certificate bound to a player Ed25519 keypair
 - **Per-server** client credential folders
-- Admin-side provisioning bundles
+- **Server trust pinning** (prevents MITM and key exfiltration)
+- Admin-side provisioning and issue bundles (ready-to-zip)
 - Certificate revocation support
-- Deterministic server identity via signing key fingerprint
+- Sliding-window **rate limiting** for auth failures
+- Deterministic server identity via signing-key fingerprint
+- Hardened challenge–response proof:
+  `protocolVersion || serverFingerprint || challenge`
 
 ---
 
@@ -32,7 +37,7 @@ Do **not** assume compatibility with other 1.20.x versions unless explicitly tes
 ## Server Installation
 
 1. Install Sigil on the server.
-2. Start the server once (to generate keys and config).
+2. Start the server once (generates keys and config).
 3. Stop the server.
 4. Configure `sigil-server.toml`.
 5. Restart the server.
@@ -54,7 +59,23 @@ handshakeTimeoutSeconds = 5
 defaultCertDaysValid = 365
 identityMode = "ONLINE_UUID"
 enforceNameMatch = true
+
+rateLimitWindowSeconds = 30
+rateLimitMaxAttempts = 10
+acceptLegacyProof = true
 ```
+
+### Key Options
+
+- `identityMode`
+  - `ONLINE_UUID` – requires Mojang-authenticated UUIDs
+  - `OFFLINE_KEYPAIR` – cryptographic identity, works in offline mode
+
+- `rateLimitWindowSeconds` / `rateLimitMaxAttempts`
+  Limits repeated failed authentication attempts by IP and UUID.
+
+- `acceptLegacyProof`
+  Allows older clients that sign the raw challenge instead of the hardened payload.
 
 ---
 
@@ -62,19 +83,21 @@ enforceNameMatch = true
 
 On first run, Sigil generates a **server Ed25519 signing keypair**.
 
-Key locations:
 ```
 config/sigil/keys/
 ├── server_ed25519_private.key
 └── server_ed25519_public.key
 ```
 
-To display the server public key fingerprint:
+To display the server fingerprint:
 ```
 /sigil pubkey
 ```
 
-The fingerprint is used to derive a stable **serverId**, which clients use for per-server credential storage.
+The fingerprint:
+- Uniquely identifies the server
+- Derives the **serverId**
+- Is pinned by clients for trust verification
 
 ---
 
@@ -90,53 +113,49 @@ All commands require **OP (permission level 3)**.
 /sigil pubkey
 ```
 
-### Command Descriptions
+---
 
-#### `issueUuid` — ONLINE_UUID (Online-mode servers)
-Issues a certificate bound to a **specific Minecraft UUID and player name**.
+### `issueUuid` — ONLINE_UUID
 
-- Intended for **online-mode** servers
-- Relies on Mojang authentication for identity
-- The certificate acts as a **server-signed allow-list entry**
-- No client private key is required
+Issues a certificate bound to a **specific Mojang UUID and player name**.
 
-Use this when you want:
-- Time-limited or revocable access
-- An extra authorization layer on top of Mojang auth
+Sigil creates:
+- An archival copy under `config/sigil/issued/`
+- A **ready-to-zip client bundle** containing:
+  - `player_cert.json`
+  - `trusted_fingerprint.txt`
+
+The bundle is what you distribute to the player.
 
 ---
 
-#### `provision` — OFFLINE_KEYPAIR (Recommended for offline/private servers)
-Generates a **new Ed25519 keypair** and issues a matching certificate.
+### `provision` — OFFLINE_KEYPAIR (Recommended)
 
-- Intended for **offline-mode**, LAN, or private servers
-- Provides true cryptographic identity (proof of key possession)
-- Generates a complete bundle for the player
+Generates a **new Ed25519 keypair** and issues a matching certificate.
 
 Output:
 ```
 config/sigil/provisioned/<player>/<serverId>/
 ├── player_cert.json
-└── player_ed25519_private.key
+├── player_ed25519_private.key
+└── trusted_fingerprint.txt
 ```
 
-Use this when you want:
-- Strong identity guarantees
-- No reliance on Mojang authentication
-- Minimal player-side setup errors
+This bundle already includes **server trust pinning**.
+
+**WARNING:**  
+`player_ed25519_private.key` is equivalent to a password.  
+If leaked, revoke the certificate immediately.
 
 ---
 
-#### `issueKey` — OFFLINE_KEYPAIR (Advanced / manual)
-Issues a certificate for an **existing Ed25519 public key** supplied by the admin.
+### `issueKey` — OFFLINE_KEYPAIR (Advanced)
 
-- Requires a **base64-encoded Ed25519 public key (X.509)**
+Issues a certificate for an **existing Ed25519 public key**.
+
+- Public key must be **X.509 base64**
 - Does NOT generate a private key
-- Intended for advanced users managing their own keys
-
-Use this when:
-- Players already have their own keypairs
-- You integrate Sigil with an external identity system
+- A trust-pinned bundle is still generated for the client
 
 ---
 
@@ -144,33 +163,61 @@ Use this when:
 
 Sigil **must be installed client-side**.
 
-### ONLINE_UUID
+### Installing a Bundle (Recommended)
 
-Player installs the issued certificate to:
+For both ONLINE_UUID and OFFLINE_KEYPAIR:
+
+1. Admin provides a bundle folder.
+2. Player copies **all files** into:
 ```
-<minecraft>/config/sigil/servers/<serverId>/player_cert.json
+<minecraft>/config/sigil/servers/<serverId>/
 ```
 
-Legacy path `config/sigil/player_cert.json` is automatically migrated on first connect.
+No additional setup is required.
 
 ---
 
-### OFFLINE_KEYPAIR
+### Manual Setup (Advanced)
 
-Player installs both files to:
+If installing files manually, the client **must** have:
+
 ```
-<minecraft>/config/sigil/servers/<serverId>/
+config/sigil/servers/<serverId>/
 ├── player_cert.json
-└── player_ed25519_private.key
+├── trusted_fingerprint.txt
+└── (OFFLINE only) player_ed25519_private.key
 ```
+
+Without `trusted_fingerprint.txt`, the client will **refuse to send credentials**.
+
+---
+
+## Client Trust Configuration
+
+File:
+```
+config/sigil-client.toml
+```
+
+Option:
+```toml
+[sigil]
+autoTrustFirstSeen = false
+```
+
+- When `false` (default): trust must be pre-pinned
+- When `true`: first-seen server fingerprint is pinned automatically
+
+Auto-trust is intended for **development and first-time bootstrap only**.
 
 ---
 
 ## Security Notes
 
-- OFFLINE private keys are equivalent to passwords
-- Revoke certificates immediately if compromised
-- Do not widen Minecraft version support without testing
+- Offline private keys are **password-equivalent**
+- Trust pinning prevents MITM and credential exfiltration
+- Server key changes will hard-fail client connections
+- Revocation takes effect immediately
 
 ---
 
