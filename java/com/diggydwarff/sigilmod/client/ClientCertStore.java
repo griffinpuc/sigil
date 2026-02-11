@@ -6,6 +6,7 @@ import com.diggydwarff.sigilmod.config.SigilPaths;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
@@ -37,6 +38,28 @@ public final class ClientCertStore {
 
             KeyFactory kf = KeyFactory.getInstance("Ed25519");
             return Optional.of(kf.generatePrivate(new PKCS8EncodedKeySpec(enc)));
+        } catch (Exception e) {
+            return Optional.empty();
+        }
+    }
+
+    public static Optional<String> loadRawCertJsonWithLegacyFallback(String serverId) {
+        // 1) Preferred per-server cert
+        Optional<String> perServer = loadRawCertJson(serverId);
+        if (perServer.isPresent()) return perServer;
+
+        // 2) Legacy global cert (pre-Option-A)
+        try {
+            Path legacy = SigilPaths.baseDir().resolve("player_cert.json");
+            if (!Files.exists(legacy)) return Optional.empty();
+
+            String json = Files.readString(legacy, StandardCharsets.UTF_8);
+
+            // Migrate to per-server folder
+            Files.createDirectories(SigilPaths.serverDir(serverId));
+            Files.writeString(SigilPaths.clientCertFile(serverId), json, StandardCharsets.UTF_8);
+
+            return Optional.of(json);
         } catch (Exception e) {
             return Optional.empty();
         }

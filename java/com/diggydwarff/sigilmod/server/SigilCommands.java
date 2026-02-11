@@ -172,7 +172,10 @@ public class SigilCommands {
             src.sendSuccess(() -> Component.literal("Issued Sigil cert for " + cert.playerName), true);
             src.sendSuccess(() -> Component.literal("Serial: " + cert.serialBase64), false);
             src.sendSuccess(() -> Component.literal("Saved: " + out), false);
-            src.sendSuccess(() -> Component.literal("Client must place cert at: <minecraft>/config/sigil/player_cert.json"), false);
+            String serverId = ServerId.fromFingerprint(KeyManager.get().publicKeyFingerprint());
+            src.sendSuccess(() -> Component.literal(
+                    "Client installs cert to: <minecraft>/config/sigil/servers/" + serverId + "/player_cert.json"
+            ), false);
 
             return 1;
         } catch (Exception ex) {

@@ -15,22 +15,21 @@ public final class ClientNetHandler {
     public static void onChallenge(S2CAuthChallenge msg) {
         String serverId = ServerId.fromFingerprint(msg.pubkeyFingerprint);
 
-        String certJson = ServerCredentialStore.loadRawCertJson(serverId).orElse("");
+        String certJson = ClientCertStore
+                .loadRawCertJsonWithLegacyFallback(serverId)
+                .orElse("");
 
-        byte[] proofSig = new byte[0];
-        PrivateKey priv = ServerCredentialStore.loadPrivateKey(serverId).orElse(null);
-        if (priv != null) {
-            // proof = sign(challenge) (OFFLINE_KEYPAIR uses it; ONLINE_UUID ignores)
-            proofSig = SigilCrypto.signEd25519(priv, msg.challenge);
+        // Optional: send proof if player has a private key for this serverId
+        byte[] proof = new byte[0];
+        PrivateKey pk = ClientCertStore.loadPrivateKey(serverId).orElse(null);
+        if (pk != null) {
+            proof = SigilCrypto.signEd25519(pk, msg.challenge);
         }
 
-        C2SAuthResponse resp = new C2SAuthResponse(
-                msg.protocolVersion,
-                msg.challenge,
-                certJson,
-                proofSig
+        // Send response
+        SigilNetwork.CHANNEL.sendToServer(
+                new C2SAuthResponse(msg.protocolVersion, msg.challenge, certJson, proof)
         );
 
-        SigilNetwork.CHANNEL.sendToServer(resp);
     }
 }
