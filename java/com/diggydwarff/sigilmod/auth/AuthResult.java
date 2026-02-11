@@ -1,0 +1,19 @@
+package com.diggydwarff.sigilmod.auth;
+
+public enum AuthResult {
+    SUCCESS,
+    MISSING_CERT,
+    BAD_PROTOCOL,
+    CHALLENGE_MISMATCH,
+    INVALID_CERT_JSON,
+    INVALID_SIGNATURE,
+    EXPIRED,
+    UUID_MISMATCH,
+    NAME_MISMATCH,
+    REVOKED,
+
+    // NEW for OFFLINE_KEYPAIR
+    MISSING_PUBLIC_KEY,
+    MISSING_CLIENT_PROOF,
+    INVALID_CLIENT_PROOF
+}
